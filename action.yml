@@ -1,0 +1,109 @@
+name: Configure SSH credentials
+
+description: Setup SSH configuration in the project root under the `.tmp/.ssh` folder
+author: Rajpal Singh
+
+inputs:
+  host:
+    description: "Alias or nickname for the SSH connection"
+    required: false
+  user:
+    description: "The SSH user"
+    required: false
+    default: "github-actions"
+  hostname:
+    description: "The SSH host IP"
+    required: false
+  key:
+    description: "The private SSH key"
+    required: false
+  filename:
+    description: "Filename for the SSH key"
+    required: false
+  port:
+    description: "SSH server port"
+    required: false
+    default: "22"
+  log-level:
+    description: "Log level setting"
+    required: false
+    default: "QUIET"
+  run:
+    description: "Command to run"
+    required: false
+  reset:
+    description: "Remove and regenerate the private file"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure SSH Key
+      shell: bash
+      run: |
+        TMP_DIR=".tmp"
+        SSH_DIR="$TMP_DIR/.ssh"
+        mkdir -p "$SSH_DIR"
+        chmod 777 "$TMP_DIR"
+        chmod 700 "$SSH_DIR"
+        PRIVATE_KEY_FILE="$SSH_DIR/${{ inputs.filename || inputs.user }}"
+
+        # Reset or Create Key File if Not Exists
+        if [[ "${{ inputs.reset }}" == "true" || ! -f "$PRIVATE_KEY_FILE" ]]; then
+          if [[ -z "${{ inputs.hostname }}" || -z "${{ inputs.key }}" ]]; then
+            echo "Error: 'hostname' and 'key' are required to generate the SSH key." >&2
+            exit 1
+          fi
+
+          echo "${{ inputs.key }}" > "$PRIVATE_KEY_FILE"
+          chmod 600 "$PRIVATE_KEY_FILE"
+
+          echo -e "Host ${{ inputs.host || inputs.user }}\n\
+            HostName ${{ inputs.hostname }}\n\
+            User ${{ inputs.user }}\n\
+            IdentityFile $PRIVATE_KEY_FILE\n\
+            Port ${{ inputs.port }}\n\
+            LogLevel ${{ inputs.log-level }}\n\
+            StrictHostKeyChecking no" > "$SSH_DIR/config"
+          chmod 600 "$SSH_DIR/config"
+        fi
+
+        # Check for .dockerignore or create one
+        if [ ! -f ".dockerignore" ]; then
+          touch .dockerignore
+        fi
+        # Ensure the SSH file is ignored
+        if ! grep -q "^$SSH_DIR/" .dockerignore; then
+          echo "$SSH_DIR/*" >> .dockerignore
+        fi
+
+        ssh -F "$SSH_DIR/config" ${{ inputs.host || inputs.user }} "echo -e \"\e[32m✅ Welcome! You have logged in successfully.\e[0m\""
+
+        # Validate Key Exists for Command Execution
+        if [[ -f "$PRIVATE_KEY_FILE" ]]; then
+          if [[ -n '${{ inputs.run }}' ]]; then
+            bash -c '${{ inputs.run }}'
+          fi
+        else
+          echo "Error: Please setup the SSH key first." >&2
+          exit 1
+        fi
+
+    # Set the outputs for the SSH config and private key file
+    - name: Set Output Values
+      shell: bash
+      run: |
+        echo "ssh-config-file=${{ github.workspace }}/.tmp/.ssh/config" >> $GITHUB_ENV
+        echo "private-key-file=${{ github.workspace }}/.tmp/.ssh/${{ inputs.host || inputs.user }}" >> $GITHUB_ENV
+
+outputs:
+  ssh-config-file:
+    description: SSH config file path
+    value: ${{ env.ssh-config-file }}
+  private-key-file:
+    description: Private key file path
+    value: ${{ env.private-key-file }}
+  ssh:
+    description: SSH command alias
+    value: "ssh -F ${{ env.ssh-config-file }} ${{ inputs.user }}"
